@@ -150,7 +150,7 @@ DEFAULTS = {
     'heading_space_after': 0,
     # --- List formatting (cm) ---
     'list_left_indent': 1.0,
-    'list_hanging_indent': 0.5,
+    'list_hanging_indent': 0,
     # --- Title page margins (cm) ---
     'title_margin_top': 2.0,
     'title_margin_bottom': 2.0,
@@ -169,7 +169,7 @@ CONFIG_FILE = 'converter-for-clunkers.json'
 def load_config(config_path=None):
     """Load config from JSON file, merging with defaults."""
     cfg = dict(DEFAULTS)
-    path = config_path or os.path.join(os.path.dirname(os.path.abspath(__file__)), CONFIG_FILE)
+    path = config_path or os.path.join(os.getcwd(), CONFIG_FILE)
     if os.path.exists(path):
         with open(path, 'r', encoding='utf-8') as f:
             cfg.update(json.load(f))
@@ -608,8 +608,25 @@ def convert(filename, lab_type, lab_num, topic, src_dir, cfg=None):
                 final_doc.part.relate_to(numbering_part, RT.NUMBERING)
                 final_numbering = numbering_part.numbering_definitions._numbering
 
-            # Copy all abstractNum elements
+            # Copy all abstractNum elements, adjusting indentation
+            list_left = int(cfg['list_left_indent'] * 360 / 0.635)  # cm -> twips
+            list_hang = int(cfg['list_hanging_indent'] * 360 / 0.635)  # cm -> twips
             for absNum in body_numbering.findall(qn('w:abstractNum')):
+                # Override indent per level to match config
+                for lvl in absNum.findall(qn('w:lvl')):
+                    ilvl = int(lvl.get(qn('w:ilvl'), '0'))
+                    pPr = lvl.find(qn('w:pPr'))
+                    if pPr is not None:
+                        ind = pPr.find(qn('w:ind'))
+                        if ind is not None:
+                            level_left = list_left + ilvl * list_left
+                            ind.set(qn('w:left'), str(level_left))
+                            if list_hang == 0:
+                                # Remove hanging indent — number/bullet flush with text
+                                if ind.get(qn('w:hanging')) is not None:
+                                    del ind.attrib[qn('w:hanging')]
+                            else:
+                                ind.set(qn('w:hanging'), str(list_hang))
                 final_numbering.append(absNum)
             # Copy all num elements (map numId -> abstractNumId)
             for num in body_numbering.findall(qn('w:num')):
@@ -699,12 +716,9 @@ def convert(filename, lab_type, lab_num, topic, src_dir, cfg=None):
                     if run.font.name and run.font.name != font_name:
                         run.font.name = font_name
 
-            # List items: override pandoc indentation
-            pPr = para._element.find(qn('w:pPr'))
-            if pPr is not None and pPr.find(qn('w:numPr')) is not None:
-                para.paragraph_format.left_indent = Cm(cfg['list_left_indent'])
-                # Hanging indent: first line pulls back for bullet/number
-                para.paragraph_format.first_line_indent = Cm(-cfg['list_hanging_indent'])
+            # List items: indentation is handled at numbering definition level
+            # (Step 3a), not at paragraph level — paragraph w:ind is ignored
+            # when w:numPr is present and the numbering level defines its own indent.
 
             # Table/figure captions — no indent, keep with next
             # Tables: left-aligned, Figures: centered
@@ -877,8 +891,7 @@ def _parse_md_filename(filename):
 def scan_md_files(config_path=None):
     """Scan cwd for .md files, parse metadata from filenames, write to config."""
     src_dir = os.getcwd()
-    script_dir = os.path.dirname(os.path.abspath(__file__))
-    cfg_path = config_path or os.path.join(script_dir, CONFIG_FILE)
+    cfg_path = config_path or os.path.join(src_dir, CONFIG_FILE)
 
     # Load existing config or start fresh
     existing = {}
