@@ -148,6 +148,7 @@ DEFAULTS = {
     'table_align': 'left',
     'heading_space_before': 6,
     'heading_space_after': 0,
+    'page_break_before_heading_level': 1,
     # --- List formatting (cm) ---
     'list_left_indent': 1.0,
     'list_hanging_indent': 0,
@@ -711,6 +712,8 @@ def convert(filename, lab_type, lab_num, topic, src_dir, cfg=None):
         # Step 4: Post-process body — fix fonts, captions, alignment, remove horizontal rules
         left_align = False
         markers_to_remove = []
+        section_break_level = int(cfg.get('page_break_before_heading_level', 1) or 0)
+        seen_section_level = set()
         for para in final_doc.paragraphs:
             # Fix heading fonts: pandoc uses Calibri
             if para.style and para.style.name and para.style.name.startswith('Heading'):
@@ -720,6 +723,16 @@ def convert(filename, lab_type, lab_num, topic, src_dir, cfg=None):
                     run.font.size = Pt(font_size)
                     run.bold = True
                     run.font.color.rgb = None
+                # Page break before section headings — skip first occurrence per level
+                if section_break_level > 0:
+                    m = re.match(r'Heading\s+(\d+)', para.style.name)
+                    if m:
+                        level = int(m.group(1))
+                        if level <= section_break_level:
+                            if level in seen_section_level:
+                                para.paragraph_format.page_break_before = True
+                            else:
+                                seen_section_level.add(level)
                 # Page break before "Джерела" heading
                 if para.text.strip().lower() in ('джерела', 'список джерел', 'література'):
                     para.paragraph_format.page_break_before = True
@@ -1015,7 +1028,8 @@ def main():
             '  Flags:       no_title, no_toc, keep_hr, page_numbers\n'
             '  Fonts:       font_name, font_size, code_font_name, code_font_size\n'
             '  Layout:      line_spacing, first_line_indent, heading_align,\n'
-            '               table_align, body_margin_*, title_margin_*\n'
+            '               table_align, page_break_before_heading_level,\n'
+            '               body_margin_*, title_margin_*\n'
             '  Files:       [{file, type, num, topic}, ...]\n'
         ),
         formatter_class=argparse.RawDescriptionHelpFormatter,
@@ -1049,6 +1063,10 @@ def main():
                               help='force page numbering')
     toggle_group.add_argument('--table-align', choices=['left', 'center', 'full'], default=None,
                               help='table alignment (default: left)')
+    toggle_group.add_argument('--section-break-level', type=int, metavar='N', default=None,
+                              help='page break before headings at level <= N (0 = off, default: 1)')
+    toggle_group.add_argument('--no-section-breaks', action='store_true', default=None,
+                              help='disable page breaks before section headings (= --section-break-level 0)')
 
     meta_group = parser.add_argument_group('metadata overrides (override config per-run)')
     meta_group.add_argument('-c', '--config', metavar='JSON',
@@ -1102,6 +1120,10 @@ def main():
         cfg['page_numbers'] = True
     if args.table_align:
         cfg['table_align'] = args.table_align
+    if args.no_section_breaks:
+        cfg['page_break_before_heading_level'] = 0
+    elif args.section_break_level is not None:
+        cfg['page_break_before_heading_level'] = args.section_break_level
     if args.discipline:
         cfg['discipline'] = args.discipline
     if args.teacher:
